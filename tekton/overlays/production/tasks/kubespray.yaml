@@ -1,0 +1,105 @@
+---
+apiVersion: tekton.dev/v1beta1
+kind: ClusterTask
+metadata:
+  name: kubespray
+  labels:
+    app.kubernetes.io/version: "0.1"
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.12.1"
+    tekton.dev/categories: CLI
+    tekton.dev/tags: cli
+    tekton.dev/displayName: "kubespray"
+    tekton.dev/platforms: "linux/amd64"
+spec:
+  workspaces:
+  - name: source
+  - name: ansible-results
+  params:
+  - name: resources-file
+    type: string
+  - name: private-key-file
+    type: string
+  - name: ansible-hosts-path
+    type: string
+  - name: playbook-path
+    type: string
+  - name: script
+    type: string
+  - name: node-pattern
+    type: string
+  - name: image
+    description: the kubespray image to use
+    type: string
+    default: quay.io/kubespray/kubespray:v2.20.0
+  results:
+    - name: ips
+  steps:
+    - name: get-nodes
+      image: $(params.image)
+      workingDir: /workspace/source
+      script: |
+        #!/usr/bin/env python3
+        import json
+        import sys
+        import os
+        import re
+        import time
+
+        resources_file = "$(workspaces.source.path)/$(params.resources-file)"
+        private_key_file = "$(workspaces.source.path)/$(params.private-key-file)"
+        ansible_hosts_path = "$(workspaces.source.path)/$(params.ansible-hosts-path)"
+        playbook_path = "$(params.playbook-path)"
+        if not playbook_path.startswith('/'):
+          playbook_path = "$(workspaces.source.path)/" + playbook_path
+
+        with open(resources_file) as f:
+          resources_obj = json.load(f)
+        
+        if 'values' not in resources_obj:
+          print("resources not found.")
+          sys.exit(0)
+
+        resources = resources_obj['values']['root_module']['resources']
+        ip_list = []
+        for resource in resources:
+          if (resource['type'] == "huaweicloud_compute_instance" and
+              resource['mode'] == "managed" and
+              re.match("$(params.node-pattern)", resource['name'])):
+            ip_list.append(resource['values']['access_ip_v4'])
+
+        if len(ip_list) == 0:
+          print("nodes not found.")
+          sys.exit(0)
+        f = open( "$(workspaces.ansible-results.path)/ips", "w" )
+        f.write( " ".join(ip_list) )
+        f.close()
+    - name: exec-ansible
+      image: $(params.image)
+      workingDir: /workspace/source
+      script: |
+        #!/bin/bash
+        set -eu
+        echo "StrictHostKeyChecking no" >> /etc/ssh/ssh_config
+        echo "UserKnownHostsFile /dev/null" >> /etc/ssh/ssh_config
+
+        IPS_FILE="$(workspaces.ansible-results.path)/ips"
+        if [ ! -f $IPS_FILE ]; then
+          exit 0
+        fi
+        
+        export ANSIBLE_HOSTS=$(workspaces.source.path)/$(params.ansible-hosts-path)
+        export ANSIBLE_IPS=`(cat $IPS_FILE)`
+        export WORKSPACES_SOURCE_PATH=$(workspaces.source.path)
+        echo "found nodes: ${ANSIBLE_IPS}"
+        eval '$(params.script)'
+
+        PLAYBOOK_PATH=$(params.playbook-path)
+        if [ "/" != ${PLAYBOOK_PATH:0:1} ] ; then
+          PLAYBOOK_PATH=$(workspaces.source.path)/$PLAYBOOK_PATH
+        fi
+
+        echo "ansible-playbook -i $(workspaces.source.path)/$(params.ansible-hosts-path) --become --become-user=root $PLAYBOOK_PATH --private-key $(workspaces.source.path)/$(params.private-key-file)"
+
+        ansible-playbook -i $(workspaces.source.path)/$(params.ansible-hosts-path) --become --become-user=root $PLAYBOOK_PATH --private-key $(workspaces.source.path)/$(params.private-key-file)
+

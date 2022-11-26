@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: webhook
+  namespace: argo-events
+spec:
+  github:
+    iac-env:
+      repositories:
+        - owner: lanbingcloud
+          names:
+            - demo-iac-env
+      webhook:
+        endpoint: /demo-iac-env
+        port: "12000"
+        method: POST
+        url: http://webhook.installer.119-13-93-105.nip.io:30080
+      events:
+        - "push"
+      apiToken:
+        key: token
+        name: github-access
+      wehookSecret:
+        key: secret
+        name: github-access
+      insecure: true
+      active: true
+      contentType: json

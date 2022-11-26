@@ -1,0 +1,14 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tekton-pipelines-controller-cluster-access
+  namespace: nautes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tekton-pipelines-controller-cluster-access
+subjects:
+  - kind: ServiceAccount
+    name: argo-events-sa
+    namespace: argo-events

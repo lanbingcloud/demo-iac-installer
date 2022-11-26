@@ -1,0 +1,149 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: installer-pipeilne
+  namespace: argo-events
+spec:
+  template:
+    serviceAccountName: argo-events-sa
+  dependencies:
+    - name: github-dep-push
+      eventSourceName: webhook
+      eventName: iac-env
+  triggers:
+    - template:
+        name: installer-pipeine
+        k8s:
+          operation: create
+          source:
+            resource:
+              apiVersion: tekton.dev/v1beta1
+              kind: PipelineRun
+              metadata:
+                generateName: installer-pipiline-
+                namespace: nautes
+              spec:
+                params:
+                - name: REVISION
+                  value: main
+                serviceAccountName: github-clone
+                pipelineSpec:
+                  params:
+                    - name: REVISION
+                      type: string
+                      description: Revision to checkout. (branch, tag, sha, ref, etc...)
+                      default: ""
+                  tasks:
+                  - name: git-clone
+                    taskRef:
+                      name: git-clone
+                      kind: ClusterTask
+                    workspaces:
+                    - name: output
+                      workspace: source-volume
+                      subPath: $(params.REVISION)
+                    params:
+                    - name: url
+                      value: https://github.com/lanbingcloud/demo-iac-env.git
+                    - name: revision
+                      value: $(params.REVISION)
+                    - name: deleteExisting
+                      value: false
+                  - name: terraform
+                    runAfter:
+                    - git-clone
+                    taskRef:
+                      name: terraform-cli
+                      kind: ClusterTask
+                    workspaces:
+                    - name: source
+                      workspace: source-volume
+                      subPath: $(params.REVISION)/terraform/hwcloud
+                    params:
+                    - name: terraform-secret
+                      value: "terraform-secret"
+                    - name: ARGS
+                      value:
+                        - apply
+                        - "-auto-approve"
+                  - name: kubernetes
+                    runAfter:
+                    - terraform
+                    taskRef:
+                      name: kubespray
+                      kind: ClusterTask
+                    workspaces:
+                    - name: source
+                      workspace: source-volume
+                      subPath: $(params.REVISION)
+                    - name: ansible-results
+                      workspace: ansible-results-volume
+                    params:
+                    - name: resources-file
+                      value: "terraform/hwcloud/resources.json"
+                    - name: private-key-file
+                      value: "terraform/hwcloud/private_key.pem"
+                    - name: ansible-hosts-path
+                      value: "kubespray/inventory/demo-iac-cluster/hosts.yaml"
+                    - name: playbook-path
+                      value: "/kubespray/cluster.yml"
+                    - name: node-pattern
+                      value: "^demo-iac-k8snode\\d+$"
+                    - name: script
+                      value: |
+                        CONFIG_FILE=${ANSIBLE_HOSTS} python3 /kubespray/contrib/inventory_builder/inventory.py ${ANSIBLE_IPS}
+                  - name: vault
+                    runAfter:
+                    - kubernetes
+                    taskRef:
+                      name: kubespray
+                      kind: ClusterTask
+                    workspaces:
+                    - name: source
+                      workspace: source-volume
+                      subPath: $(params.REVISION)
+                    - name: ansible-results
+                      workspace: ansible-results-volume
+                    params:
+                    - name: resources-file
+                      value: "terraform/hwcloud/resources.json"
+                    - name: private-key-file
+                      value: "terraform/hwcloud/private_key.pem"
+                    - name: ansible-hosts-path
+                      value: "vault-ansible/hosts"
+                    - name: playbook-path
+                      value: "vault-ansible/vault-site.yml"
+                    - name: node-pattern
+                      value: "^demo-iac-vaultnode$"
+                    - name: script
+                      value: |
+                        cat > ${ANSIBLE_HOSTS} << EOF
+                        [vault_instances]
+                        vault.local ansible_host=${ANSIBLE_IPS} ansible_ssh_user=root
+                        EOF
+
+                        ROLES_PATH="${WORKSPACES_SOURCE_PATH}/vault-ansible/roles"
+                        ROLE_NAME="ansible-vault"
+
+                        if [ -d $ROLES_PATH/$ROLE_NAME ]
+                        then
+                          git -C $ROLES_PATH/$ROLE_NAME checkout v2.5.8
+                        else
+                          mkdir -p $ROLES_PATH
+                          git -C $ROLES_PATH clone https://github.com/ansible-community/ansible-vault.git
+                          git -C $ROLES_PATH/$ROLE_NAME checkout v2.5.8
+                        fi
+                  workspaces:
+                  - name: source-volume
+                  - name: ansible-results-volume
+                workspaces:
+                - name: source-volume
+                  persistentVolumeClaim:
+                    claimName: source-pvc
+                - name: ansible-results-volume
+                  emptyDir: {}
+          parameters:
+            - src:
+                dependencyName: github-dep-push
+                dataKey: body.ref
+              dest: spec.params.0.value

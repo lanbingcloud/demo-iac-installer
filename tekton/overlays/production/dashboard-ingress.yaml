@@ -1,0 +1,18 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dashboard
+  namespace: tekton-pipelines
+spec:
+  rules:
+  - host: tekton.119-13-93-105.nip.io
+    http:
+      paths:
+      - path: /
+        pathType: ImplementationSpecific
+        backend:
+          service:
+            name: tekton-dashboard
+            port: 
+              number: 9097
