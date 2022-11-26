@@ -16,3 +16,8 @@ kubectl apply -f ./project.yaml -f ./app.yaml
 # ---argoevents secret---
 kubectl create namespace argo-events
 kubectl apply -f ./argo-events/overlays/production/secret-github-access.yaml
+
+# ---pipeline secret---
+kubectl create namespace nautes
+kubectl apply -f ./installer/secret-github-deploykey.yaml
+kubectl apply -f ./installer/secret-terraform-secret.yaml
